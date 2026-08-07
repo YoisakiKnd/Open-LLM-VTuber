@@ -8,6 +8,7 @@ It uses FastAPI for the server and Starlette for static file serving.
 
 import os
 import shutil
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
@@ -17,6 +18,7 @@ from starlette.staticfiles import StaticFiles as StarletteStaticFiles
 from .routes import init_client_ws_route, init_webtool_routes, init_proxy_route
 from .service_context import ServiceContext
 from .config_manager.utils import Config
+from .rust_gateway_process import RustGatewayProcess
 
 
 # Create a custom StaticFiles class that adds CORS headers
@@ -72,8 +74,17 @@ class WebSocketServer:
     """
 
     def __init__(self, config: Config, default_context_cache: ServiceContext = None):
-        self.app = FastAPI(title="Open-LLM-VTuber Server")  # Added title for clarity
         self.config = config
+        self.rust_gateway_process = None
+        self.app = FastAPI(
+            title="Open-LLM-VTuber Server",
+            lifespan=self._lifespan,
+        )
+
+        @self.app.get("/healthz")
+        async def healthz():
+            return {"status": "ok", "service": "open-llm-vtuber-python"}
+
         self.default_context_cache = (
             default_context_cache or ServiceContext()
         )  # Use provided context or initialize a new empty one waiting to be loaded
@@ -147,6 +158,27 @@ class WebSocketServer:
             CORSStaticFiles(directory="frontend", html=True),
             name="frontend",
         )
+
+    @asynccontextmanager
+    async def _lifespan(self, app: FastAPI):
+        gateway_config = self.config.system_config.rust_gateway
+        if gateway_config.enabled:
+            self.rust_gateway_process = RustGatewayProcess(
+                gateway_config,
+                "127.0.0.1",
+                self.config.system_config.port,
+            )
+            self.rust_gateway_process.start()
+            try:
+                await self.rust_gateway_process.wait_until_ready()
+            except Exception:
+                self.rust_gateway_process.stop()
+                raise
+        try:
+            yield
+        finally:
+            if self.rust_gateway_process:
+                self.rust_gateway_process.stop()
 
     async def initialize(self):
         """Asynchronously load the service context from config.

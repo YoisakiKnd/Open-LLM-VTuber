@@ -85,8 +85,9 @@ class BasicMemoryAgent(AgentInterface):
                 "ToolManager not provided, agent will not have pre-formatted tools."
             )
 
+        self._base_system = system if system else self._system
         self._set_llm(llm)
-        self.set_system(system if system else self._system)
+        self.set_system(self._base_system)
 
         if self._use_mcpp and not all(
             [
@@ -102,7 +103,6 @@ class BasicMemoryAgent(AgentInterface):
             [
                 self._tool_manager,
                 self._tool_executor,
-                self._json_detector,
             ]
         ):
             logger.warning(
@@ -110,6 +110,32 @@ class BasicMemoryAgent(AgentInterface):
             )
 
         logger.info("BasicMemoryAgent initialized.")
+
+    def create_session(
+        self,
+        *,
+        tool_manager: Optional[ToolManager] = None,
+        tool_executor: Optional[ToolExecutor] = None,
+        mcp_prompt_string: str | None = None,
+    ) -> "BasicMemoryAgent":
+        return BasicMemoryAgent(
+            llm=self._llm,
+            system=self._base_system,
+            live2d_model=self._live2d_model,
+            tts_preprocessor_config=self._tts_preprocessor_config,
+            faster_first_response=self._faster_first_response,
+            segment_method=self._segment_method,
+            use_mcpp=self._use_mcpp,
+            interrupt_method=self.interrupt_method,
+            tool_prompts=self._tool_prompts,
+            tool_manager=tool_manager,
+            tool_executor=tool_executor,
+            mcp_prompt_string=(
+                self._mcp_prompt_string
+                if mcp_prompt_string is None
+                else mcp_prompt_string
+            ),
+        )
 
     def _set_llm(self, llm: StatelessLLMInterface):
         """Set the LLM for chat completion."""
@@ -120,6 +146,7 @@ class BasicMemoryAgent(AgentInterface):
         """Set the system prompt."""
         logger.debug(f"Memory Agent: Setting system prompt: '''{system}'''")
 
+        self._base_system = system
         if self.interrupt_method == "user":
             system = f"{system}\n\nIf you received `[interrupted by user]` signal, you were interrupted."
 

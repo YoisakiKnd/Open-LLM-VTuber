@@ -1,4 +1,5 @@
 import asyncio
+import copy
 from collections import deque
 from enum import Enum
 
@@ -31,6 +32,7 @@ class VADEngine(VADInterface):
         required_hits: int = 3,
         required_misses: int = 24,
         smoothing_window: int = 5,
+        model=None,
     ):
         self.config = SileroVADConfig(
             orig_sr=orig_sr,
@@ -41,7 +43,7 @@ class VADEngine(VADInterface):
             required_misses=required_misses,
             smoothing_window=smoothing_window,
         )
-        self.model = self.load_vad_model()
+        self.model = model or self.load_vad_model()
         self.state = StateMachine(self.config)
         self.window_size_samples = 512 if self.config.target_sr == 16000 else 256
         # 512 / 16000 = 0.032s
@@ -49,6 +51,12 @@ class VADEngine(VADInterface):
     def load_vad_model(self):
         logger.info("Loading Silero-VAD model...")
         return load_silero_vad()
+
+    def create_session(self):
+        return VADEngine(
+            **self.config.model_dump(),
+            model=copy.deepcopy(self.model),
+        )
 
     def detect_speech(self, audio_data: list[float]):
         audio_np = np.array(audio_data, dtype=np.float32)

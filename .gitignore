@@ -34,6 +34,7 @@ conda
 
 # Sensitive data
 .env
+/.olv/
 api_keys.py
 src/open_llm_vtuber/llm/user_credentials.json
 
@@ -74,5 +75,10 @@ conf.yaml.backup
 tmp/
 private/
 mcp_servers.json
+
+# Rust build artifacts
+/target/
+/apps/desktop/resources/runtime/
+**/target/
 
 .vscode/

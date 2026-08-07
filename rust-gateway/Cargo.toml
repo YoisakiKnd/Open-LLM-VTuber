@@ -1,0 +1,35 @@
+[package]
+name = "open-llm-vtuber-gateway"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Realtime WebSocket gateway for Open-LLM-VTuber"
+license = "MIT"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+async-stream = "0.3"
+async-trait = "0.1"
+atomic-write-file = "0.3"
+axum = { version = "0.8", features = ["ws"] }
+bytes = "1.10"
+clap = { version = "4.5", features = ["derive", "env"] }
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+schemars = "0.9"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+thiserror = "2.0"
+tokio = { version = "1.47", features = ["macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-tungstenite = "0.29"
+tower-http = { version = "0.6", features = ["fs", "limit", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+ts-rs = { version = "12.0", features = ["serde-json-impl"] }
+url = "2.5"
+uuid = { version = "1.18", features = ["v4"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

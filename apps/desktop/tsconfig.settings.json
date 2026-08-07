@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "composite": false,
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.settings.tsbuildinfo",
+    "types": ["vitest/globals"]
+  },
+  "include": [
+    "src/renderer/src/settings/**/*.ts",
+    "src/renderer/src/settings/**/*.tsx"
+  ]
+}

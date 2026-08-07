@@ -138,7 +138,7 @@ def run(console_log_level: str):
     # Load configurations from yaml file
     config: Config = validate_config(read_yaml("conf.yaml"))
     server_config = config.system_config
-
+    skip_rust_gateway = os.environ.get("OLV_SKIP_RUST_GATEWAY") == "1"
     if server_config.enable_proxy:
         logger.info("Proxy mode enabled - /proxy-ws endpoint will be available")
 
@@ -155,10 +155,20 @@ def run(console_log_level: str):
         sys.exit(1)  # Exit if initialization fails
 
     # Run the Uvicorn server
-    logger.info(f"Starting server on {server_config.host}:{server_config.port}")
+    runtime_host = server_config.host
+    if server_config.rust_gateway.enabled:
+        gateway = server_config.rust_gateway
+        runtime_host = "127.0.0.1"
+        logger.info(
+            f"Starting Python AI runtime on {runtime_host}:{server_config.port}"
+        )
+        logger.info(f"Public Rust gateway: http://{gateway.host}:{gateway.port}")
+    else:
+        runtime_host = "127.0.0.1" if skip_rust_gateway else server_config.host
+        logger.info(f"Starting server on {runtime_host}:{server_config.port}")
     uvicorn.run(
         app=server.app,
-        host=server_config.host,
+        host=runtime_host,
         port=server_config.port,
         log_level=console_log_level.lower(),
     )

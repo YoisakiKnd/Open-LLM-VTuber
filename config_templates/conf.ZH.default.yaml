@@ -10,6 +10,38 @@ system_config:
   host: 'localhost' # 服务器监听的地址，'0.0.0.0' 表示监听所有网络接口；如果需要安全，可以使用 '127.0.0.1'（仅本地访问）
   port: 12393 # 服务器监听的端口
   config_alts_dir: 'characters' # 用于存放替代配置的目录
+  # Rust 实时网关。启用前请先构建 release 二进制。
+  rust_gateway:
+    enabled: false
+    binary_path: 'rust-gateway/target/release/open-llm-vtuber-gateway'
+    # Rust 管理的版本化设置文档；迁移期间旧 YAML 保持只读。
+    settings_file: '.olv/settings.v1.json'
+    # 旧 YAML 仅通过脱敏适配器只读暴露。
+    legacy_config_file: 'conf.yaml'
+    legacy_characters_dir: 'characters'
+    host: '127.0.0.1'
+    port: 12394
+    max_connections: 64
+    max_connections_per_ip: 8
+    max_connection_attempts_per_minute: 60
+    max_message_bytes: 2097152
+    max_http_body_bytes: 33554432
+    # HTTP 上传或响应在以下时间内没有新的 body 数据块时才中止。
+    http_upload_idle_timeout_ms: 15000
+    http_response_idle_timeout_ms: 60000
+    session_queue_capacity: 32
+    max_audio_seconds: 120
+    # 可选 `audio-start` 模式 `energy-vad` 的设置（16/44.1/48 kHz 单声道 PCM16-LE 会归一化到 16 kHz）。
+    vad_rms_threshold: 0.015
+    vad_frame_samples: 512
+    vad_start_frames: 3
+    vad_end_frames: 24
+    vad_pre_roll_frames: 10
+    connect_timeout_ms: 5000
+    startup_timeout_seconds: 5.0
+    allowed_origins:
+      - 'http://localhost:12394'
+      - 'http://127.0.0.1:12394'
   tool_prompts: # 要插入到角色提示词中的工具提示词
     live2d_expression_prompt: 'live2d_expression_prompt' # 将追加到系统提示末尾，让 LLM（大型语言模型）包含控制面部表情的关键字。支持的关键字将自动加载到 `[<insert_emomap_keys>]` 的位置。
     # 启用 think_tag_prompt 可让不具备思考输出的 LLM 也能展示内心想法、心理活动和动作（以括号形式呈现），但不会进行语音合成。更多详情请参考 think_tag_prompt。

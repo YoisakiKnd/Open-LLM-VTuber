@@ -7,6 +7,7 @@ import numpy as np
 from loguru import logger
 
 from .service_context import ServiceContext
+from .audio_buffer import AudioBuffer
 from .chat_group import (
     ChatGroupManager,
     handle_group_operation,
@@ -27,6 +28,8 @@ from .conversations.conversation_handler import (
     handle_group_interrupt,
     handle_individual_interrupt,
 )
+from .conversations.tts_manager import TTSTaskManager
+from .agent.output_types import Actions, DisplayText
 
 
 class MessageType(Enum):
@@ -68,7 +71,7 @@ class WebSocketHandler:
         self.chat_group_manager = ChatGroupManager()
         self.current_conversation_tasks: Dict[str, Optional[asyncio.Task]] = {}
         self.default_context_cache = default_context_cache
-        self.received_data_buffers: Dict[str, np.ndarray] = {}
+        self.received_data_buffers: Dict[str, AudioBuffer] = {}
 
         # Message handlers mapping
         self._message_handlers = self._init_message_handlers()
@@ -89,6 +92,8 @@ class WebSocketHandler:
             "raw-audio-data": self._handle_raw_audio_data,
             "text-input": self._handle_conversation_trigger,
             "ai-speak-signal": self._handle_conversation_trigger,
+            "asr-transcribe": self._handle_asr_transcribe,
+            "tts-speak": self._handle_tts_speak,
             "fetch-configs": self._handle_fetch_configs,
             "switch-config": self._handle_config_switch,
             "fetch-backgrounds": self._handle_fetch_backgrounds,
@@ -141,7 +146,7 @@ class WebSocketHandler:
         """Store client data and initialize group status"""
         self.client_connections[client_uid] = websocket
         self.client_contexts[client_uid] = session_service_context
-        self.received_data_buffers[client_uid] = np.array([])
+        self.received_data_buffers[client_uid] = AudioBuffer()
 
         self.chat_group_manager.client_group_map[client_uid] = ""
         await self.send_group_update(websocket, client_uid)
@@ -191,8 +196,9 @@ class WebSocketHandler:
             live2d_model=self.default_context_cache.live2d_model,
             asr_engine=self.default_context_cache.asr_engine,
             tts_engine=self.default_context_cache.tts_engine,
-            vad_engine=self.default_context_cache.vad_engine,
-            agent_engine=self.default_context_cache.agent_engine,
+            vad_engine=self.default_context_cache.create_session_vad(),
+            agent_engine=None,
+            default_agent_engine=self.default_context_cache.agent_engine,
             translate_engine=self.default_context_cache.translate_engine,
             mcp_server_registery=self.default_context_cache.mcp_server_registery,
             tool_adapter=self.default_context_cache.tool_adapter,
@@ -214,7 +220,22 @@ class WebSocketHandler:
         try:
             while True:
                 try:
-                    data = await websocket.receive_json()
+                    message = await websocket.receive()
+                    if message["type"] == "websocket.disconnect":
+                        raise WebSocketDisconnect(
+                            code=message.get("code", 1000),
+                            reason=message.get("reason"),
+                        )
+                    if message.get("bytes") is not None:
+                        self.received_data_buffers[client_uid].append_pcm16le(
+                            message["bytes"]
+                        )
+                        continue
+
+                    text = message.get("text")
+                    if text is None:
+                        continue
+                    data = json.loads(text)
                     message_handler.handle_message(client_uid, data)
                     await self._route_message(websocket, client_uid, data)
                 except WebSocketDisconnect:
@@ -297,26 +318,34 @@ class WebSocketHandler:
             send_group_update=self.send_group_update,
         )
 
+        context = self.client_contexts.get(client_uid)
+
         # Clean up other client data
         self.client_connections.pop(client_uid, None)
-        self.client_contexts.pop(client_uid, None)
         self.received_data_buffers.pop(client_uid, None)
         if client_uid in self.current_conversation_tasks:
             task = self.current_conversation_tasks[client_uid]
             if task and not task.done():
                 task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
             self.current_conversation_tasks.pop(client_uid, None)
 
-        # Call context close to clean up resources (e.g., MCPClient)
-        context = self.client_contexts.get(client_uid)
         if context:
             await context.close()
+        self.client_contexts.pop(client_uid, None)
 
         logger.info(f"Client {client_uid} disconnected")
         message_handler.cleanup_client(client_uid)
 
     async def _cleanup_failed_connection(self, client_uid: str) -> None:
         """Clean up failed connection data"""
+        context = self.client_contexts.get(client_uid)
+        if context:
+            await context.close()
+
         self.client_connections.pop(client_uid, None)
         self.client_contexts.pop(client_uid, None)
         self.received_data_buffers.pop(client_uid, None)
@@ -475,16 +504,81 @@ class WebSocketHandler:
         if history_uid == context.history_uid:
             context.history_uid = None
 
+    async def _handle_asr_transcribe(
+        self, websocket: WebSocket, client_uid: str, data: WSMessage
+    ) -> None:
+        """Transcribe the buffered microphone audio (native chat mode).
+
+        The Rust gateway routes `mic-audio-end` to this handler instead of
+        starting a full Python conversation. The buffered PCM16 audio is
+        drained, transcribed, and the text is returned as `asr-result`.
+        """
+        buffer = self.received_data_buffers.get(client_uid)
+        context = self.client_contexts.get(client_uid)
+        if buffer is None or context is None:
+            return
+        audio = buffer.drain()
+        if audio.size == 0:
+            await websocket.send_text(json.dumps({"type": "asr-result", "text": ""}))
+            return
+        if context.asr_engine is None:
+            logger.warning("asr-transcribe requested but no ASR engine is configured")
+            await websocket.send_text(
+                json.dumps(
+                    {"type": "asr-result", "text": "", "error": "no ASR engine configured"}
+                )
+            )
+            return
+        try:
+            input_text = await context.asr_engine.async_transcribe_np(audio)
+        except Exception as error:
+            logger.error(f"ASR transcription failed: {error}")
+            input_text = ""
+        await websocket.send_text(json.dumps({"type": "asr-result", "text": input_text}))
+
+    async def _handle_tts_speak(
+        self, websocket: WebSocket, client_uid: str, data: WSMessage
+    ) -> None:
+        """Synthesize and deliver assistant speech (native chat mode).
+
+        The Rust gateway sends `tts-speak` after a native provider reply; this
+        handler performs TTS only (no LLM) and streams the audio payload back
+        to the client through the normal channel.
+        """
+        text = (data.get("text") or "").strip()
+        if not text:
+            return
+        context = self.client_contexts.get(client_uid)
+        if context is None:
+            return
+        if context.tts_engine is None:
+            logger.warning("tts-speak requested but no TTS engine is configured")
+            return
+        tts_manager = TTSTaskManager()
+        display_text = DisplayText(
+            text=text,
+            name=context.character_config.character_name,
+            avatar=context.character_config.avatar,
+        )
+        await tts_manager.speak(
+            tts_text=text,
+            display_text=display_text,
+            actions=Actions(),
+            live2d_model=context.live2d_model,
+            tts_engine=context.tts_engine,
+            websocket_send=websocket.send_text,
+        )
+        if tts_manager.task_list:
+            await asyncio.gather(*tts_manager.task_list)
+        tts_manager.clear()
+
     async def _handle_audio_data(
         self, websocket: WebSocket, client_uid: str, data: WSMessage
     ) -> None:
         """Handle incoming audio data"""
         audio_data = data.get("audio", [])
         if audio_data:
-            self.received_data_buffers[client_uid] = np.append(
-                self.received_data_buffers[client_uid],
-                np.array(audio_data, dtype=np.float32),
-            )
+            self.received_data_buffers[client_uid].append(audio_data)
 
     async def _handle_raw_audio_data(
         self, websocket: WebSocket, client_uid: str, data: WSMessage
@@ -502,9 +596,8 @@ class WebSocketHandler:
                     pass
                 elif len(audio_bytes) > 1024:
                     # Detected audio activity (voice)
-                    self.received_data_buffers[client_uid] = np.append(
-                        self.received_data_buffers[client_uid],
-                        np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32),
+                    self.received_data_buffers[client_uid].append(
+                        np.frombuffer(audio_bytes, dtype=np.int16)
                     )
                     await websocket.send_text(
                         json.dumps({"type": "control", "text": "mic-audio-end"})

@@ -1,0 +1,4 @@
+src/renderer/WebSDK/**/*.ts
+src/renderer/MotionSync/**/*.js
+src/renderer/MotionSync/**/*.ts
+src/renderer/src/settings/generated/**/*.ts

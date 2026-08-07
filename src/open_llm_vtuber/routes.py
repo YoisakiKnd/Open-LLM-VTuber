@@ -12,6 +12,70 @@ from .websocket_handler import WebSocketHandler
 from .proxy_handler import ProxyHandler
 
 
+PROVIDER_RPC_VERSION = 1
+PROVIDER_RPC_BINARY_PREFIX = b"OLV-RPC/1\0"
+
+
+class ProviderRpcWebSocket:
+    def __init__(self, websocket: WebSocket):
+        self.websocket = websocket
+
+    async def receive(self):
+        message = await self.websocket.receive()
+        if message.get("type") != "websocket.receive":
+            return message
+        if message.get("bytes") is not None:
+            payload = message["bytes"]
+            if not payload.startswith(PROVIDER_RPC_BINARY_PREFIX):
+                raise ValueError("Invalid provider RPC binary envelope")
+            return {"type": "websocket.receive", "bytes": payload[len(PROVIDER_RPC_BINARY_PREFIX):]}
+        text = message.get("text")
+        if text is None:
+            return message
+        envelope = json.loads(text)
+        if envelope.get("version") != PROVIDER_RPC_VERSION or envelope.get("kind") != "text":
+            raise ValueError("Invalid provider RPC text envelope")
+        payload = envelope.get("payload")
+        if not isinstance(payload, str):
+            raise ValueError("Provider RPC text payload must be a string")
+        return {"type": "websocket.receive", "text": payload}
+
+    async def send_text(self, text: str):
+        await self.websocket.send_text(
+            json.dumps(
+                {"version": PROVIDER_RPC_VERSION, "kind": "text", "payload": text},
+                separators=(",", ":"),
+            )
+        )
+
+    async def send_bytes(self, data: bytes):
+        await self.websocket.send_bytes(PROVIDER_RPC_BINARY_PREFIX + data)
+
+    async def send_json(self, data, mode="text"):
+        if mode != "text":
+            raise ValueError("Provider RPC only supports text JSON envelopes")
+        await self.send_text(json.dumps(data, separators=(",", ":")))
+
+    async def close(self, *args, **kwargs):
+        await self.websocket.close(*args, **kwargs)
+
+
+async def run_client_websocket(websocket: WebSocket, ws_handler: WebSocketHandler, transport=None):
+    await websocket.accept()
+    client_uid = str(uuid4())
+    transport = transport or websocket
+
+    try:
+        await ws_handler.handle_new_connection(transport, client_uid)
+        await ws_handler.handle_websocket_communication(transport, client_uid)
+    except WebSocketDisconnect:
+        await ws_handler.handle_disconnect(client_uid)
+    except Exception as e:
+        logger.error(f"Error in WebSocket connection: {e}")
+        await ws_handler.handle_disconnect(client_uid)
+        raise
+
+
 def init_client_ws_route(default_context_cache: ServiceContext) -> APIRouter:
     """
     Create and return API routes for handling the `/client-ws` WebSocket connections.
@@ -28,19 +92,16 @@ def init_client_ws_route(default_context_cache: ServiceContext) -> APIRouter:
 
     @router.websocket("/client-ws")
     async def websocket_endpoint(websocket: WebSocket):
-        """WebSocket endpoint for client connections"""
-        await websocket.accept()
-        client_uid = str(uuid4())
+        """Handle the legacy public browser WebSocket."""
+        await run_client_websocket(websocket, ws_handler)
 
-        try:
-            await ws_handler.handle_new_connection(websocket, client_uid)
-            await ws_handler.handle_websocket_communication(websocket, client_uid)
-        except WebSocketDisconnect:
-            await ws_handler.handle_disconnect(client_uid)
-        except Exception as e:
-            logger.error(f"Error in WebSocket connection: {e}")
-            await ws_handler.handle_disconnect(client_uid)
-            raise
+    @router.websocket("/internal/v1/session-ws")
+    async def provider_rpc_endpoint(websocket: WebSocket):
+        """Handle the loopback-only versioned Rust provider RPC."""
+        if websocket.client is None or websocket.client.host not in {"127.0.0.1", "::1"}:
+            await websocket.close(code=1008, reason="loopback provider RPC only")
+            return
+        await run_client_websocket(websocket, ws_handler, ProviderRpcWebSocket(websocket))
 
     return router
 

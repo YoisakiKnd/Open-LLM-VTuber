@@ -1,0 +1,3 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+src/renderer/public/libs/live2d.min.js -text

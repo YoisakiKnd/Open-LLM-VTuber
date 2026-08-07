@@ -207,8 +207,9 @@ class ServiceContext:
         asr_engine: ASRInterface,
         tts_engine: TTSInterface,
         vad_engine: VADInterface,
-        agent_engine: AgentInterface,
-        translate_engine: TranslateInterface | None,
+        agent_engine: AgentInterface | None,
+        default_agent_engine: AgentInterface | None = None,
+        translate_engine: TranslateInterface | None = None,
         mcp_server_registery: ServerRegistry | None = None,
         tool_adapter: ToolAdapter | None = None,
         send_text: Callable = None,
@@ -230,6 +231,7 @@ class ServiceContext:
         self.asr_engine = asr_engine
         self.tts_engine = tts_engine
         self.vad_engine = vad_engine
+        self.default_agent_engine = default_agent_engine or agent_engine
         self.agent_engine = agent_engine
         self.translate_engine = translate_engine
         # Load potentially shared components by reference
@@ -243,6 +245,19 @@ class ServiceContext:
             self.character_config.agent_config.agent_settings.basic_memory_agent.use_mcpp,
             self.character_config.agent_config.agent_settings.basic_memory_agent.mcp_enabled_servers,
         )
+
+        if self.agent_engine is None:
+            if hasattr(self.default_agent_engine, "create_session"):
+                self.agent_engine = self.default_agent_engine.create_session(
+                    tool_manager=self.tool_manager,
+                    tool_executor=self.tool_executor,
+                    mcp_prompt_string=self.mcp_prompt,
+                )
+            else:
+                await self.init_agent(
+                    self.character_config.agent_config,
+                    self.character_config.persona_prompt,
+                )
 
         logger.debug(f"Loaded service context with cache: {character_config}")
 
@@ -310,6 +325,19 @@ class ServiceContext:
         self.config = config
         self.system_config = config.system_config or self.system_config
         self.character_config = config.character_config
+
+    def create_session_vad(self) -> VADInterface | None:
+        """Create connection-local VAD state while reusing model weights when supported."""
+        if self.vad_engine is None:
+            return None
+        if hasattr(self.vad_engine, "create_session"):
+            return self.vad_engine.create_session()
+
+        vad_config = self.character_config.vad_config
+        return VADFactory.get_vad_engine(
+            vad_config.vad_model,
+            **getattr(vad_config, vad_config.vad_model).model_dump(),
+        )
 
     def init_live2d(self, live2d_model_name: str) -> None:
         logger.info(f"Initializing Live2D: {live2d_model_name}")

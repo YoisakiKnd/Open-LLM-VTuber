@@ -5,6 +5,38 @@ system_config:
   port: 12393
   # New setting for alternative configurations
   config_alts_dir: 'characters'
+  # Rust realtime gateway. Build the release binary before enabling.
+  rust_gateway:
+    enabled: false
+    binary_path: 'rust-gateway/target/release/open-llm-vtuber-gateway'
+    # Versioned Rust-owned settings document; legacy YAML remains read-only during migration.
+    settings_file: '.olv/settings.v1.json'
+    # Legacy YAML is read-only and exposed only through redacted adapter data.
+    legacy_config_file: 'conf.yaml'
+    legacy_characters_dir: 'characters'
+    host: '127.0.0.1'
+    port: 12394
+    max_connections: 64
+    max_connections_per_ip: 8
+    max_connection_attempts_per_minute: 60
+    max_message_bytes: 2097152
+    max_http_body_bytes: 33554432
+    # Abort HTTP uploads/responses only after this much time without a body chunk.
+    http_upload_idle_timeout_ms: 15000
+    http_response_idle_timeout_ms: 60000
+    session_queue_capacity: 32
+    max_audio_seconds: 120
+    # Optional `audio-start` mode `energy-vad` settings (mono PCM16-LE at 16/44.1/48 kHz is normalized to 16 kHz).
+    vad_rms_threshold: 0.015
+    vad_frame_samples: 512
+    vad_start_frames: 3
+    vad_end_frames: 24
+    vad_pre_roll_frames: 10
+    connect_timeout_ms: 5000
+    startup_timeout_seconds: 5.0
+    allowed_origins:
+      - 'http://localhost:12394'
+      - 'http://127.0.0.1:12394'
   # Tool prompts that will be appended to the persona prompt
   tool_prompts:
     # This will be appended to the end of system prompt to let LLM include keywords to control facial expressions.
